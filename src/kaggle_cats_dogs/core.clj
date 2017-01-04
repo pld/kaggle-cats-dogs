@@ -3,14 +3,13 @@
             [clojure.java.io :as io]
             [clojure.string :as string]
             [cortex.dataset :as ds]
-            [cortex.nn.description :as desc]
+            [cortex.nn.layers :as desc]
             [cortex.suite.classification :as classification]
             [cortex.suite.inference :as infer]
             [cortex.suite.io :as suite-io]
             [cortex.suite.train :as suite-train]
             [mikera.image.core :as imagez]
             [mikera.vectorz.matrix-api] ;; loading this namespace enables vectorz implementation for core.matrix
-            [think.compute.nn.train :as train]
             [think.gate.core :as gate]
             [think.image.data-augmentation :as image-aug]
             [think.image.image :as image]
@@ -219,6 +218,16 @@
         (png->observation dataset-datatype false $)
         (vector id $))))
 
+(defn max-index
+  [coll]
+  (second (reduce (fn [[max-val max-idx] idx]
+                    (if (or (nil? max-val)
+                            (> (coll idx) max-val))
+                      [(coll idx) idx]
+                      [max-val max-idx]))
+                  [nil nil]
+                  (range (count coll)))))
+
 (defn classify-kaggle-tests []
   (let [id-observation-pairs  (map kaggle-png-to-test-observation-pairs (gather-files "resources/test"))
         class-names (classification/get-class-names-from-directory testing-dir)
@@ -232,7 +241,7 @@
                                                                    dataset-image-size)
                                             dataset-datatype)]
      (mapv (fn [x y] [(first x) (->> (vec y)
-                                   (opt/max-index)
+                                   max-index
                                    (get class-names))])
           id-observation-pairs
           results)))
