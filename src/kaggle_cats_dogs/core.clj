@@ -29,8 +29,10 @@
 (def dataset-datatype :float)
 (def max-image-rotation-degrees 25)
 (def original-data-dir "resources/train")
-(def training-dir "data-cats-dogs/training")
-(def testing-dir "data-cats-dogs/testing")
+(def original-labels-csv
+  "wpt_verification_form_final_2016_11_28_05_45_22_052637.csv.pruned.csv")
+(def training-dir "waterpoints/training")
+(def testing-dir "waterpoints/testing")
 
 (defn produce-indexed-data-label-seq
   [files]
@@ -52,19 +54,40 @@
        (file-seq)
        (filter #(.isFile %))))
 
-
-(defn build-image-data
-  []
-  (let [files (gather-files original-data-dir)
-        pfiles (partition (int (/ (count files) 2)) (shuffle files))
-        training-observation-label-seq (produce-indexed-data-label-seq
+(defn build-split-image-data
+  [files produce-indexed-data-label-seq-fn]
+  (let [pfiles (partition (int (/ (count files) 2)) (shuffle files))
+        training-observation-label-seq (produce-indexed-data-label-seq-fn
                                         (first pfiles))
-        testing-observation-label-seq (produce-indexed-data-label-seq
+        testing-observation-label-seq (produce-indexed-data-label-seq-fn
                                        (last pfiles))
         train-fn (partial resize-and-write-data training-dir)
         test-fn (partial resize-and-write-data  testing-dir)]
     (dorun (pmap train-fn training-observation-label-seq))
     (dorun (pmap test-fn training-observation-label-seq))))
+
+(defn build-image-data
+  []
+  (let [labels (csv/read-csv (slurp original-labels-csv))
+        images->labels (apply hash-map
+                              (->> (drop 1 labels)
+                                   (map #(vector
+                                          (last %)
+                                          (if (= (first %) "1.0")
+                                            "yes" "no")))
+                                   flatten))
+        files (gather-files "images")
+        build-indexed-data-label-seq
+        (fn [file-list]
+          (->> (for [file file-list]
+                 [file (get images->labels (.getName file))])
+               (map-indexed vector)))]
+    (build-split-image-data files build-indexed-data-label-seq)))
+
+(defn build-image-data-cats-and-dogs
+  []
+  (build-split-image-data (gather-files original-data-dir)
+                          produce-indexed-data-label-seq))
 
 (defn create-basic-network-description
   []
@@ -94,13 +117,12 @@
 (defn png->observation
   "Create an observation from input.  "
   [datatype augment? img]
-  ;;image->patch always returns [r-data g-data g-data]
-  ;;since we know these are grayscale *and* we setup the
-  ;;network for 1 channel we just take r-data
-  (patch/image->patch (if augment?
-                        (img-aug-pipeline img)
-                        img)
-                      (image-util/image->rect img) datatype))
+  ;; image->patch always returns [r-data g-data g-data]
+  ;; since we know these are grayscale *and* we setup the
+  ;; network for 1 channel we just take r-data
+  (patch/image->patch (cond-> img augment? img-aug-pipeline)
+                      (image-util/image->rect img)
+                      datatype))
 
 
 (defn observation->image
@@ -108,9 +130,9 @@
   (patch/patch->image observation dataset-image-size))
 
 
-;;Bumping this up and producing several images per source image means that you may need
-;;to shuffle the training epoch data to keep your batches from being unbalanced...this has
-;;somewhat severe performance impacts.
+;; Bumping this up and producing several images per source image means that you
+;; may need to shuffle the training epoch data to keep your batches from
+;; being unbalanced... this has somewhat severe performance impacts.
 (def ^:dynamic *num-augmented-images-per-file* 1)
 
 (defn observation-label-pairs
@@ -120,19 +142,19 @@
   [augment? datatype [file label]]
   (let [img (imagez/load-image file)
         png->obs #(png->observation datatype augment? img)
-        ;;When augmenting we can return any number of items from one image.
-        ;;You want to be sure that at your epoch size you get a very random, fairly
-        ;;balanced set of observations->labels.  Furthermore you want to be sure
-        ;;that at the batch size you have rough balance when possible.
-        ;;The infinite-dataset implementation will shuffle each epoch of data when
-        ;;training so it isn't necessary to randomize these patches at this level.
+        ;; When augmenting we can return any number of items from one image.
+        ;; You want to be sure that at your epoch size you get a very random, fairly
+        ;; balanced set of observations->labels.  Furthermore you want to be sure
+        ;; that at the batch size you have rough balance when possible.
+        ;; The infinite-dataset implementation will shuffle each epoch of data when
+        ;; training so it isn't necessary to randomize these patches at this level.
         repeat-count (if augment?
                        *num-augmented-images-per-file*
                        1)]
-    ;;Laziness is not your friend here.  The classification system is setup
-    ;;to call this on another CPU thread while training *so* if you are lazy here
-    ;;then this sequence will get realized on the main training thread thus blocking
-    ;;the training process unnecessarily.
+    ;; Laziness is not your friend here.  The classification system is setup
+    ;; to call this on another CPU thread while training *so* if you are lazy here
+    ;; then this sequence will get realized on the main training thread thus blocking
+    ;; the training process unnecessarily.
     (mapv vector
           (repeatedly repeat-count png->obs)
           (repeat label))))
@@ -144,7 +166,9 @@
   (println "building dataset")
   (classification/create-classification-dataset-from-labeled-data-subdirs
    training-dir testing-dir
-   (ds/create-image-shape dataset-num-channels dataset-image-size dataset-image-size)
+   (ds/create-image-shape dataset-num-channels
+                          dataset-image-size
+                          dataset-image-size)
    (partial observation-label-pairs true dataset-datatype)
    (partial observation-label-pairs false dataset-datatype)
    :epoch-element-count 6000
@@ -158,14 +182,17 @@
   ([dataset initial-description]
    (let [data-display-atom (atom {})
          confusion-matrix-atom (atom {})]
-     (classification/reset-dataset-display data-display-atom dataset observation->image)
+     (classification/reset-dataset-display data-display-atom
+                                           dataset
+                                           observation->image)
      (when-let [loaded-data (suite-train/load-network "trained-network.nippy"
                                                       initial-description)]
-       (classification/reset-confusion-matrix confusion-matrix-atom observation->image
-                                              (suite-train/evaluate-network
-                                               dataset
-                                               (:network-description loaded-data)
-                                               :batch-type :cross-validation)))
+       (classification/reset-confusion-matrix
+        confusion-matrix-atom observation->image
+        (suite-train/evaluate-network dataset
+                                      (:network-description loaded-data)
+                                      :batch-type :cross-validation
+                                      :force-gpu? false)))
      (let [open-message
            (gate/open (atom
                        (classification/create-routing-map confusion-matrix-atom
@@ -183,8 +210,10 @@
   []
   (let [dataset (create-dataset)
         initial-description (create-basic-network-description)
-        confusion-matrix-atom (display-dataset-and-model dataset initial-description)]
-    (classification/train-forever dataset observation->image
+        confusion-matrix-atom (display-dataset-and-model dataset
+                                                         initial-description)]
+    (classification/train-forever dataset
+                                  observation->image
                                   initial-description
                                   :confusion-matrix-atom confusion-matrix-atom)))
 
@@ -196,20 +225,22 @@
 (defn label-one
   "Take an arbitrary image and label it."
   []
-  (let [file-label-pairs (shuffle (classification/directory->file-label-seq testing-dir
-                                                                            false))
+  (let [file-label-pairs (shuffle
+                          (classification/directory->file-label-seq testing-dir
+                                                                    false))
         [test-file test-label] (first file-label-pairs)
         test-img (imagez/load-image test-file)
         observation (png->observation dataset-datatype false test-img)]
     (imagez/show test-img)
-    (infer/classify-one-observation (:network-description
-                                     (suite-io/read-nippy-file "trained-network.nippy"))
-                                    observation
-                                    (ds/create-image-shape dataset-num-channels
-                                                           dataset-image-size
-                                                           dataset-image-size)
-                                    dataset-datatype
-                                    (classification/get-class-names-from-directory testing-dir))))
+    (infer/classify-one-observation
+     (:network-description
+      (suite-io/read-nippy-file "trained-network.nippy"))
+     observation
+     (ds/create-image-shape dataset-num-channels
+                            dataset-image-size
+                            dataset-image-size)
+     dataset-datatype
+     (classification/get-class-names-from-directory testing-dir))))
 
 (defn kaggle-png-to-test-observation-pairs [file]
   (let [id (-> (.getName file) (string/split #"\.") (first))]
@@ -229,18 +260,20 @@
                   (range (count coll)))))
 
 (defn classify-kaggle-tests []
-  (let [id-observation-pairs  (map kaggle-png-to-test-observation-pairs (gather-files "resources/test"))
+  (let [id-observation-pairs (map kaggle-png-to-test-observation-pairs
+                                  (gather-files "resources/test"))
         class-names (classification/get-class-names-from-directory testing-dir)
         observations (mapv second id-observation-pairs)
         class-names (classification/get-class-names-from-directory testing-dir)
-        results (infer/infer-n-observations (:network-description
-                                             (suite-io/read-nippy-file "trained-network.nippy"))
-                                            observations
-                                            (ds/create-image-shape dataset-num-channels
-                                                                   dataset-image-size
-                                                                   dataset-image-size)
-                                            dataset-datatype)]
-     (mapv (fn [x y] [(first x) (->> (vec y)
+        results (infer/infer-n-observations
+                 (:network-description
+                  (suite-io/read-nippy-file "trained-network.nippy"))
+                 observations
+                 (ds/create-image-shape dataset-num-channels
+                                        dataset-image-size
+                                        dataset-image-size)
+                 dataset-datatype)]
+    (mapv (fn [x y] [(first x) (->> (vec y)
                                    max-index
                                    (get class-names))])
           id-observation-pairs
@@ -248,15 +281,14 @@
 
 (defn write-kaggle-results [results]
   (with-open [out-file (io/writer "kaggle-results.csv")]
-    (csv/write-csv out-file
-                   (into [["id" "label"]]
-                         (-> (mapv (fn [[id class]] [(Integer/parseInt id) (if (= "dog" class) 1 0)]) results)
-                             (sort))))))
+    (csv/write-csv
+     out-file
+     (into [["id" "label"]]
+           (-> (mapv (fn [[id class]]
+                       [(Integer/parseInt id) (if (= "dog" class) 1 0)]) results)
+               (sort))))))
 
 (comment
-
   (label-one)
-
   (-> (classify-kaggle-tests)
-      (write-kaggle-results))
-)
+      (write-kaggle)))
