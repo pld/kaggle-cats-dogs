@@ -67,27 +67,27 @@
     (dorun (pmap test-fn training-observation-label-seq))))
 
 (defn build-image-data
-  []
-  (let [labels (csv/read-csv (slurp original-labels-csv))
-        images->labels (apply hash-map
-                              (->> (drop 1 labels)
-                                   (map #(vector
-                                          (last %)
-                                          (if (= (first %) "1.0")
-                                            "yes" "no")))
-                                   flatten))
-        files (gather-files "images")
-        build-indexed-data-label-seq
-        (fn [file-list]
-          (->> (for [file file-list]
-                 [file (get images->labels (.getName file))])
-               (map-indexed vector)))]
-    (build-split-image-data files build-indexed-data-label-seq)))
-
-(defn build-image-data-cats-and-dogs
-  []
-  (build-split-image-data (gather-files original-data-dir)
-                          produce-indexed-data-label-seq))
+  [& [dataset]]
+  (case dataset
+    :waterpoints
+    (let [labels (csv/read-csv (slurp original-labels-csv))
+          images->labels (apply hash-map
+                                (->> (drop 1 labels)
+                                     (map #(vector
+                                            (last %)
+                                            (if (= (first %) "1.0")
+                                              "yes" "no")))
+                                     flatten))
+          files (gather-files "images")
+          build-indexed-data-label-seq
+          (fn [file-list]
+            (->> (for [file file-list]
+                   [file (get images->labels (.getName file))])
+                 (map-indexed vector)))]
+      (build-split-image-data files build-indexed-data-label-seq))
+    ;; Default to cats and dogs image data
+    (build-split-image-data (gather-files original-data-dir)
+                            produce-indexed-data-label-seq)))
 
 (defn create-basic-network-description
   []
