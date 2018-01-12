@@ -4,8 +4,9 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.8.0"]
-                 [onaio/cortex.suite "0.3.1-SNAPSHOT"]
+                 [onaio/cortex.suite "0.4.0-SNAPSHOT"]
                  [thinktopic/think.gate "0.1.2"]
+                 [clj-exif-orientation "0.2.1"]
                  [org.clojure/clojurescript "1.8.51"]
                  [org.bytedeco.javacpp-presets/cuda "8.0-1.2"]
                  [org.clojure/data.csv "0.1.3"]]
