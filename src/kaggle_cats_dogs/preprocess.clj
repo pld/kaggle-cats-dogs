@@ -3,10 +3,10 @@
             [clojure.java.io :as io]
             [clojure.string :as string]
             [clj-exif-orientation.core :as ceo]
-            [mikera.image.core :as imagez]
-            [think.image.image :as image]))
+            [mikera.image.core :as imagez]))
 
 (def dataset-image-size 150)
+
 (def original-data-dir "images")
 (def rotated-data-dir (str original-data-dir "-rotated/"))
 (def original-labels-csv
@@ -27,17 +27,17 @@
        (map-indexed vector)))
 
 (defn resize-and-write-data
-  [output-dir [idx [file label]]]
-  (-> label Exception. throw)
+  [output-dir [idx [file [functional wp-type]]]]
   (let [name (first (string/split (.getName file) #"\."))
-        img-path (str output-dir "/" label "/" name ".png")]
+        img-path (str output-dir "/" wp-type "/" functional "/" name ".png")]
     (when-not (.exists (io/file img-path))
       (io/make-parents img-path)
       (-> (imagez/load-image file)
-          (image/resize dataset-image-size dataset-image-size)
+          (imagez/resize dataset-image-size dataset-image-size)
           (imagez/save img-path)))
-    (println name)
-    nil))
+    (println name)))
+
+(build-image-data)
 
 (defn- gather-files [path]
   (->> (io/file path)
@@ -59,12 +59,13 @@
 (defn build-image-data
   []
   (let [labels (csv/read-csv (slurp original-labels-csv))
-        images->labels (apply hash-map
-                              (->> (drop 1 labels)
-                                   (map #(vector
-                                          (last (string/split (first %) #"\/"))
-                                          %))
-                                   flatten))
+        images->labels (apply
+                        hash-map
+                        (->> (rest labels)
+                             (reduce #(conj %1
+                                            (last (string/split (first %2) #"\/"))
+                                            (rest %2))
+                                     [])))
         files (gather-files rotated-data-dir)
         build-indexed-data-label-seq
         (fn [file-list]
@@ -72,5 +73,3 @@
                  [file (get images->labels (.getName file))])
                (map-indexed vector)))]
     (build-split-image-data files build-indexed-data-label-seq)))
-
-(build-image-data)
